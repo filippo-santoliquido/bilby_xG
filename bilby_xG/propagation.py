@@ -40,6 +40,8 @@ _H = 0.0041356677
 _KM_BY_MPC = 3.240779289444365e-20
 # 1 Mpc / speed_of_light, in seconds.
 _MPC_TO_S = 1.0292713e14
+# np.trapz was removed in numpy 2.4; np.trapezoid exists from numpy 2.0.
+_trapezoid = getattr(np, "trapezoid", None) or np.trapz
 
 
 class Propagation:
@@ -187,7 +189,7 @@ class ModifiedDispersion(Propagation):
         integrand = (1 + z_array) ** (a - 2) / np.sqrt(
             Omega_m * (1 + z_array) ** 3 + Omega_de
         )
-        D_a = (1 + z) ** (1 - a) / H_0 * np.trapz(integrand, z_array)
+        D_a = (1 + z) ** (1 - a) / H_0 * _trapezoid(integrand, z_array)
 
         D_L = self.luminosity_distance * _MPC_TO_S
         lambda_A_eff = ((1 + z) ** (1 - a) * D_L / D_a) ** (1 / (a - 2)) * lambda_A

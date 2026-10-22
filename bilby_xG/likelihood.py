@@ -44,6 +44,20 @@ __author__ = [
 ]
 
 
+def _fiducial_frequency_domain_strain(waveform_generator, parameters):
+    """Evaluate the relative-binning source model on the full frequency grid.
+
+    The source models read ``fiducial`` from their keyword arguments. It is
+    passed through the waveform arguments, which bilby merges into the
+    parameters (bilby >= 2.7 also uses them to switch fiducial mode).
+    """
+    waveform_generator.waveform_arguments["fiducial"] = 1
+    try:
+        return waveform_generator.frequency_domain_strain(parameters)
+    finally:
+        waveform_generator.waveform_arguments["fiducial"] = 0
+
+
 class GravitationalWaveTransientNextGeneration(GravitationalWaveTransient):
     """Transient likelihood using the frequency-dependent antenna response.
 
@@ -93,7 +107,7 @@ class GravitationalWaveTransientNextGeneration(GravitationalWaveTransient):
         self.earth_rotation_time_delay = earth_rotation_time_delay
         self.finite_size = finite_size
 
-    def _compute_full_waveform(self, signal_polarizations, interferometer):
+    def _compute_full_waveform(self, signal_polarizations, interferometer, parameters=None):
         """Project the waveform onto the frequency-dependent detector response.
 
         Parameters
@@ -103,6 +117,9 @@ class GravitationalWaveTransientNextGeneration(GravitationalWaveTransient):
             ``{"plus", "cross"}`` dict or a per-mode nested dict.
         interferometer: bilby.gw.detector.Interferometer
             Interferometer to compute the response with respect to.
+        parameters: dict, optional
+            Parameters of the signal. If None, ``self.parameters`` is used
+            (bilby < 2.7 convention).
         """
         frequencies = interferometer.frequency_array
         idxs_above_minimum_frequency = frequencies > \
@@ -123,7 +140,8 @@ class GravitationalWaveTransientNextGeneration(GravitationalWaveTransient):
                 waveform_polarizations_red[key]['cross'] = \
                     signal_polarizations[key]['cross'][idxs_above_minimum_frequency]
         h = np.zeros_like(frequencies, dtype=complex)
-        parameters, _ = self.waveform_generator.parameter_conversion(self.parameters)
+        parameters, _ = self.waveform_generator.parameter_conversion(
+            self.parameters if parameters is None else parameters)
         h[idxs_above_minimum_frequency] = \
             interferometer.get_detector_response_for_frequency_dependent_antenna_response(
                 waveform_polarizations=waveform_polarizations_red,
@@ -192,7 +210,8 @@ class MBGravitationalWaveTransientNextGeneration(MBGravitationalWaveTransient):
             )
         self.response_update = response_update
 
-    def calculate_snrs(self, waveform_polarizations, interferometer):
+    def calculate_snrs(self, waveform_polarizations, interferometer, return_array=True,
+                       parameters=None):
         """Compute the SNRs for multi-banding with the frequency-dependent response.
 
         Parameters
@@ -200,12 +219,18 @@ class MBGravitationalWaveTransientNextGeneration(MBGravitationalWaveTransient):
         waveform_polarizations: dict
             Waveform at the banded frequency points (plus/cross or per-mode).
         interferometer: bilby.gw.detector.Interferometer
+        return_array: bool
+            Unused; accepted for compatibility with bilby.
+        parameters: dict, optional
+            Parameters of the signal. If None, ``self.parameters`` is used
+            (bilby < 2.7 convention).
 
         Returns
         =======
         snrs: named tuple of SNRs
         """
-        converted_parameters, _ = self.waveform_generator.parameter_conversion(self.parameters)
+        converted_parameters, _ = self.waveform_generator.parameter_conversion(
+            self.parameters if parameters is None else parameters)
         waveform_polarizations_red = {}
         try:
             waveform_polarizations_red['plus'] = \
@@ -400,7 +425,8 @@ class RelativeBinningGravitationalWaveTransientNextGeneration(RelativeBinningGra
         parameters = parameters.copy()
         parameters["fiducial"] = 1
         parameters.update(self.get_sky_frame_parameters(parameters=parameters))
-        self.fiducial_polarizations = self.waveform_generator.frequency_domain_strain(parameters)
+        self.fiducial_polarizations = _fiducial_frequency_domain_strain(
+            self.waveform_generator, parameters)
         maximum_nonzero_index = np.where(self.fiducial_polarizations["plus"] != 0j)[0][-1]
         logger.debug(f"Maximum Nonzero Index is {maximum_nonzero_index}")
         maximum_nonzero_frequency = self.waveform_generator.frequency_array[maximum_nonzero_index]
@@ -437,9 +463,11 @@ class RelativeBinningGravitationalWaveTransientNextGeneration(RelativeBinningGra
             wf[frequencies > self.maximum_frequency] = 0
             self.per_detector_fiducial_waveforms[interferometer.name] = wf
 
-    def compute_waveform_ratio_per_interferometer(self, waveform_polarizations, interferometer):
+    def compute_waveform_ratio_per_interferometer(self, waveform_polarizations, interferometer,
+                                                  parameters=None):
         name = interferometer.name
-        converted_parameters, _ = self.waveform_generator.parameter_conversion(self.parameters)
+        converted_parameters, _ = self.waveform_generator.parameter_conversion(
+            self.parameters if parameters is None else parameters)
         strain = interferometer.get_detector_response_for_frequency_dependent_antenna_response(
             waveform_polarizations=waveform_polarizations,
             parameters=converted_parameters,
@@ -712,7 +740,8 @@ class RelativeBinningGravitationalWaveTransientNextGenerationModebyMode(Gravitat
         parameters["fiducial"] = 1
         parameters.update(self.get_sky_frame_parameters(parameters=parameters))
 
-        self.fiducial_polarizations = self.waveform_generator.frequency_domain_strain(parameters)
+        self.fiducial_polarizations = _fiducial_frequency_domain_strain(
+            self.waveform_generator, parameters)
 
         if self.fiducial_polarizations is None:
             raise ValueError(f"Cannot compute fiducial waveforms for {parameters}")
@@ -928,7 +957,8 @@ class RelativeBinningGravitationalWaveTransientNextGenerationModebyMode(Gravitat
 
         self.summary_data = summary_data
 
-    def compute_waveform_ratio_per_interferometer(self, waveform_polarizations, interferometer):
+    def compute_waveform_ratio_per_interferometer(self, waveform_polarizations, interferometer,
+                                                  parameters=None):
         name = interferometer.name
         r0, r1 = {}, {}
         waveform_args = self.waveform_generator.waveform_arguments.copy()
@@ -936,7 +966,8 @@ class RelativeBinningGravitationalWaveTransientNextGenerationModebyMode(Gravitat
         for ell, emm in self.mode_array:
             mode_key = f"{ell},{emm}"
             waveform_polarizations_reduced = {mode_key: waveform_polarizations[mode_key]}
-            converted_parameters, _ = self.waveform_generator.parameter_conversion(self.parameters)
+            converted_parameters, _ = self.waveform_generator.parameter_conversion(
+                self.parameters if parameters is None else parameters)
             strain = interferometer.get_detector_response_for_frequency_dependent_antenna_response(
                 waveform_polarizations=waveform_polarizations_reduced,
                 parameters=converted_parameters,
@@ -953,8 +984,9 @@ class RelativeBinningGravitationalWaveTransientNextGenerationModebyMode(Gravitat
         self.waveform_generator.waveform_arguments = waveform_args.copy()
         return r0, r1
 
-    def _compute_full_waveform(self, signal_polarizations, interferometer):
-        r0, r1 = self.compute_waveform_ratio_per_interferometer(signal_polarizations, interferometer)
+    def _compute_full_waveform(self, signal_polarizations, interferometer, parameters=None):
+        r0, r1 = self.compute_waveform_ratio_per_interferometer(
+            signal_polarizations, interferometer, parameters=parameters)
         f = interferometer.frequency_array
         full_waveform_ratio = np.zeros_like(f, dtype=complex)
         full_waveform = np.zeros_like(f, dtype=complex)
@@ -975,7 +1007,8 @@ class RelativeBinningGravitationalWaveTransientNextGenerationModebyMode(Gravitat
 
         return full_waveform
 
-    def calculate_snrs(self, waveform_polarizations, interferometer, return_array=True):
+    def calculate_snrs(self, waveform_polarizations, interferometer, return_array=True,
+                       parameters=None):
         """Calculate the SNRs (Signal-to-Noise Ratios).
 
         Parameters
@@ -986,6 +1019,9 @@ class RelativeBinningGravitationalWaveTransientNextGenerationModebyMode(Gravitat
             The interferometer for which to calculate the SNRs.
         return_array: bool, optional
             If True, return the full waveform.
+        parameters: dict, optional
+            Parameters of the signal. If None, ``self.parameters`` is used
+            (bilby < 2.7 convention).
 
         Returns
         -------
@@ -995,6 +1031,7 @@ class RelativeBinningGravitationalWaveTransientNextGenerationModebyMode(Gravitat
         r0, r1 = self.compute_waveform_ratio_per_interferometer(
             waveform_polarizations=waveform_polarizations,
             interferometer=interferometer,
+            parameters=parameters,
         )
         a0 = self.summary_data[interferometer.name]['a0'].copy()
         a1 = self.summary_data[interferometer.name]['a1'].copy()
@@ -1019,6 +1056,7 @@ class RelativeBinningGravitationalWaveTransientNextGenerationModebyMode(Gravitat
             full_waveform = self._compute_full_waveform(
                 signal_polarizations=waveform_polarizations,
                 interferometer=interferometer,
+                parameters=parameters,
             )
             d_inner_h_array = 4 / self.waveform_generator.duration * np.fft.fft(
                 full_waveform[0:-1]
